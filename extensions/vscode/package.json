@@ -2,7 +2,7 @@
   "name": "clawd-terminal-focus",
   "displayName": "Clawd Terminal Focus",
   "description": "Enables Clawd desktop pet to focus the correct terminal tab via URI",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "clawd",
   "engines": {
     "vscode": "^1.70.0"

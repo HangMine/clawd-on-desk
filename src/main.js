@@ -3428,7 +3428,7 @@ Object.defineProperties(this || {}, {}); // no-op placeholder
 
 // ── Auto-install VS Code / Cursor terminal-focus extension ──
 const EXT_ID = "clawd.clawd-terminal-focus";
-const EXT_VERSION = "0.1.4";
+const EXT_VERSION = "0.1.5";
 const EXT_DIR_NAME = `${EXT_ID}-${EXT_VERSION}`;
 
 function installTerminalFocusExtension() {

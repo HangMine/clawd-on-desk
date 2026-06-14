@@ -33,6 +33,12 @@ function normalizeFsPath(value) {
   return normalized.replace(/[\\/]+$/, "");
 }
 
+function normalizeCodexConversationId(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) return "";
+  return text.startsWith("codex:") ? text.slice("codex:".length) : text;
+}
+
 function pathContains(parentPath, childPath) {
   if (!parentPath || !childPath) return false;
   if (parentPath === childPath) return true;
@@ -103,6 +109,26 @@ async function openCodexSidebar() {
   return { ok: true, command, focusCommand: null };
 }
 
+async function openCodexConversation(sessionId) {
+  const conversationId = normalizeCodexConversationId(sessionId);
+  if (!conversationId) return { ok: false, reason: "conversation-id-missing" };
+
+  const encodedId = encodeURIComponent(conversationId);
+  const preferredSchemes = /insiders/i.test(vscode.env.appName || "")
+    ? ["vscode-insiders", "vscode"]
+    : ["vscode", "vscode-insiders"];
+  for (const scheme of preferredSchemes) {
+    const target = `${scheme}://openai.chatgpt/local/${encodedId}`;
+    try {
+      const handled = await vscode.env.openExternal(vscode.Uri.parse(target));
+      if (handled !== false) {
+        return { ok: true, target, conversationId };
+      }
+    } catch {}
+  }
+  return { ok: false, reason: "deeplink-open-failed", conversationId };
+}
+
 async function focusCodexInWindow(data) {
   const pids = Array.isArray(data && data.pids) ? data.pids.filter(Number.isFinite) : [];
   const terminalMatch = pids.length ? await matchTerminalByPids(pids) : null;
@@ -119,13 +145,20 @@ async function focusCodexInWindow(data) {
     log(`focus-codex result reason=${sidebarResult.reason}`);
     return { ok: false, statusCode: 503, reason: sidebarResult.reason };
   }
-  log(`focus-codex result reason=opened match=${terminalMatch ? "pid" : "cwd"} command=${sidebarResult.command || "-"} focus=${sidebarResult.focusCommand || "-"}`);
+  const deeplinkResult = await openCodexConversation(data && data.sessionId);
+  if (deeplinkResult.ok) {
+    log(`focus-codex deeplink result=opened target=${deeplinkResult.target}`);
+  } else if (deeplinkResult.reason !== "conversation-id-missing") {
+    log(`focus-codex deeplink result=${deeplinkResult.reason} conversation=${deeplinkResult.conversationId || "-"}`);
+  }
+  log(`focus-codex result reason=opened match=${terminalMatch ? "pid" : "cwd"} command=${sidebarResult.command || "-"} focus=${sidebarResult.focusCommand || "-"} deeplink=${deeplinkResult.ok ? "opened" : deeplinkResult.reason}`);
   return {
     ok: true,
     statusCode: 200,
     match: terminalMatch ? "pid" : "cwd",
     command: sidebarResult.command,
     focusCommand: sidebarResult.focusCommand,
+    deeplink: deeplinkResult.ok ? "opened" : deeplinkResult.reason,
     editor: normalizeEditor(data && data.editor) || null,
   };
 }
@@ -226,5 +259,6 @@ module.exports = {
     normalizeFsPath,
     pathContains,
     normalizeEditor,
+    normalizeCodexConversationId,
   },
 };
