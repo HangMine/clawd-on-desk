@@ -1973,6 +1973,36 @@ describe("buildSessionSnapshot", () => {
     assert.strictEqual(snapshot.hudLastSessionId, "codex:new");
   });
 
+  it("keeps editor-hosted local Codex sessions visible when they share one agent process", () => {
+    api.sessions.set("codex:old", rawSession("working", {
+      updatedAt: 1000,
+      sourcePid: pid,
+      agentPid: pid,
+      pidReachable: true,
+      cwd: "/tmp/current-project",
+      agentId: "codex",
+      editor: "code",
+      recentEvents: [{ event: "PreToolUse", state: "working", at: 900 }],
+    }));
+    api.sessions.set("codex:new", rawSession("idle", {
+      updatedAt: 2000,
+      sourcePid: pid,
+      agentPid: pid,
+      pidReachable: true,
+      cwd: "/tmp/current-project",
+      agentId: "codex",
+      editor: "code",
+      recentEvents: [{ event: "Stop", state: "attention", at: 1900 }],
+    }));
+
+    const snapshot = api.buildSessionSnapshot();
+    assert.strictEqual(api.resolveDisplayState(), "working");
+    assert.strictEqual(snapshot.sessions.find((s) => s.id === "codex:old").hiddenFromHud, false);
+    assert.strictEqual(snapshot.sessions.find((s) => s.id === "codex:new").hiddenFromHud, false);
+    assert.strictEqual(snapshot.hudTotalNonIdle, 2);
+    assert.strictEqual(snapshot.hudLastSessionId, "codex:new");
+  });
+
   it("hides detached ended idle sessions from HUD aggregates when auto-clear is enabled and source is dead", () => {
     api.cleanup();
     api = require("../src/state")(makeCtx({

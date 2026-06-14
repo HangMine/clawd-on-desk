@@ -116,6 +116,23 @@ describe("state-priority display selection", () => {
     ])), "working");
   });
 
+  it("does not dedupe editor-hosted Codex sessions that share an agent pid", () => {
+    assert.strictEqual(resolveDominantSessionState(new Map([
+      ["codex:old", session("working", {
+        agentId: "codex",
+        agentPid: 4242,
+        editor: "code",
+        updatedAt: 1000,
+      })],
+      ["codex:new", session("idle", {
+        agentId: "codex",
+        agentPid: 4242,
+        editor: "code",
+        updatedAt: 2000,
+      })],
+    ])), "working");
+  });
+
   it("does not dedupe remote Codex sessions that happen to share an agent pid", () => {
     assert.strictEqual(resolveDominantSessionState(new Map([
       ["codex:remote-old", session("working", {

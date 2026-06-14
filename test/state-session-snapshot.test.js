@@ -421,6 +421,34 @@ describe("state-session-snapshot builder", () => {
     assert.deepStrictEqual(snapshot.groups, [{ host: "", ids: ["codex:new", "codex:old"] }]);
   });
 
+  it("keeps editor-hosted local Codex sessions visible even when they share one agent process", () => {
+    const snapshot = buildSessionSnapshot(new Map([
+      ["codex:old", session("working", {
+        agentId: "codex",
+        agentPid: 4242,
+        editor: "code",
+        updatedAt: 1000,
+        cwd: "/repo/old",
+      })],
+      ["codex:new", session("idle", {
+        agentId: "codex",
+        agentPid: 4242,
+        editor: "code",
+        updatedAt: 2000,
+        cwd: "/repo/new",
+        recentEvents: [{ event: "Stop", state: "attention", at: 1900 }],
+      })],
+    ]), {
+      statePriority: STATE_PRIORITY,
+      getAgentIconUrl: () => null,
+    });
+
+    assert.strictEqual(snapshot.sessions.find((entry) => entry.id === "codex:old").hiddenFromHud, false);
+    assert.strictEqual(snapshot.sessions.find((entry) => entry.id === "codex:new").hiddenFromHud, false);
+    assert.strictEqual(snapshot.hudTotalNonIdle, 2);
+    assert.strictEqual(snapshot.hudLastSessionId, "codex:new");
+  });
+
   it("snapshot signatures include visible fields but ignore icon URL churn", () => {
     const base = buildSessionSnapshot(new Map([
       ["s1", session("working", {

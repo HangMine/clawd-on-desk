@@ -12,8 +12,14 @@ function normalizePositiveInteger(value) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
 }
 
+function normalizeEditor(value) {
+  const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return text === "code" || text === "cursor" ? text : "";
+}
+
 function getLocalCodexProcessKey(session) {
   if (!session || session.agentId !== "codex" || session.host || session.headless) return null;
+  if (normalizeEditor(session.editor)) return null;
   const agentPid = normalizePositiveInteger(session.agentPid);
   return agentPid ? `codex-agent:${agentPid}` : null;
 }
