@@ -35,6 +35,12 @@ describe("getPlatformConfig()", () => {
     assert.ok(cfg.terminalNames.has("openconsole.exe"));
   });
 
+  it("recognizes VS Code Insiders as both terminal host and editor on Windows", { skip: process.platform !== "win32" }, () => {
+    const cfg = getPlatformConfig();
+    assert.ok(cfg.terminalNames.has("code - insiders.exe"));
+    assert.strictEqual(cfg.editorMap["code - insiders.exe"], "code");
+  });
+
   it("merges extraTerminals into base set", () => {
     const cfg = getPlatformConfig({
       extraTerminals: { win: ["custom.exe"], mac: ["custom"], linux: ["custom"] },
@@ -423,6 +429,17 @@ describe("createPidResolver() — Windows PowerShell path", { skip: process.plat
     const resolve = createPidResolver({ platformConfig: cfg, startPid: 200 });
     withMockedExec(() => snapshotJson([
       { pid: 200, name: "code.exe", ppid: 0 },
+    ]), () => {
+      const { detectedEditor } = resolve();
+      assert.strictEqual(detectedEditor, "code");
+    });
+  });
+
+  it("detects editor from Code - Insiders process name", () => {
+    const cfg = getPlatformConfig();
+    const resolve = createPidResolver({ platformConfig: cfg, startPid: 200 });
+    withMockedExec(() => snapshotJson([
+      { pid: 200, name: "code - insiders.exe", ppid: 0 },
     ]), () => {
       const { detectedEditor } = resolve();
       assert.strictEqual(detectedEditor, "code");

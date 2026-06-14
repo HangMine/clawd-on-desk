@@ -7,7 +7,7 @@
 const BASE_TERMINAL_NAMES_WIN = [
   "windowsterminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe",
   "conhost.exe", "openconsole.exe",
-  "code.exe", "alacritty.exe", "wezterm-gui.exe", "mintty.exe",
+  "code.exe", "code - insiders.exe", "alacritty.exe", "wezterm-gui.exe", "mintty.exe",
   "conemu64.exe", "conemu.exe", "hyper.exe", "tabby.exe",
   "antigravity.exe", "warp.exe", "iterm.exe", "ghostty.exe",
 ];
@@ -25,7 +25,11 @@ const SYSTEM_BOUNDARY_WIN = new Set(["explorer.exe", "services.exe", "winlogon.e
 const SYSTEM_BOUNDARY_MAC = new Set(["launchd", "init", "systemd"]);
 const SYSTEM_BOUNDARY_LINUX = new Set(["systemd", "init"]);
 
-const BASE_EDITOR_MAP_WIN = { "code.exe": "code", "cursor.exe": "cursor" };
+const BASE_EDITOR_MAP_WIN = {
+  "code.exe": "code",
+  "code - insiders.exe": "code",
+  "cursor.exe": "cursor",
+};
 const BASE_EDITOR_MAP_MAC = { "code": "code", "cursor": "cursor" };
 const BASE_EDITOR_MAP_LINUX = { "code": "code", "cursor": "cursor", "code-insiders": "code" };
 

@@ -195,6 +195,11 @@ describe("state-session-snapshot builder", () => {
     const snapshot = buildSessionSnapshot(new Map([
       ["terminal", session("working", { sourcePid: 123 })],
       ["webui", session("working", { sourcePid: 456, platform: "webui" })],
+      ["codex-local", session("working", {
+        agentId: "codex",
+        sourcePid: 789,
+        editor: "code",
+      })],
       ["codex:019e115a-4df2-7ed0-b90e-8e6345aca777", session("working", {
         agentId: "codex",
         codexOriginator: "Codex Desktop",
@@ -207,6 +212,8 @@ describe("state-session-snapshot builder", () => {
     assert.deepStrictEqual(byId.get("terminal").focusTarget, { type: "terminal", url: null });
     assert.strictEqual(byId.get("webui").canFocus, false);
     assert.strictEqual(byId.get("webui").focusTarget, null);
+    assert.strictEqual(byId.get("codex-local").canFocus, true);
+    assert.deepStrictEqual(byId.get("codex-local").focusTarget, { type: "codex-editor", url: null });
     assert.strictEqual(byId.get("codex:019e115a-4df2-7ed0-b90e-8e6345aca777").canFocus, true);
     assert.deepStrictEqual(byId.get("codex:019e115a-4df2-7ed0-b90e-8e6345aca777").focusTarget, {
       type: "codex-thread",

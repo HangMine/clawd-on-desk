@@ -125,7 +125,10 @@ const {
   getFocusableLocalHudSessionIds: selectFocusableLocalHudSessionIds,
   getSessionFocusTarget,
 } = require("./session-focus");
-const { focusCodexThreadTarget } = require("./session-focus-handoff");
+const {
+  focusCodexEditorTarget,
+  focusCodexThreadTarget,
+} = require("./session-focus-handoff");
 const { isSessionInProgress } = require("./state-session-snapshot");
 const { getAllAgents } = require("../agents/registry");
 // ── Autoplay policy: allow sound playback without user gesture ──
@@ -1513,6 +1516,23 @@ function focusTerminalSession(session, sessionId, requestSource) {
   });
 }
 
+function focusEditorSessionWindow(session, sessionId, requestSource) {
+  if (!session || !session.sourcePid) return false;
+  return focusTerminalWindow({
+    sourcePid: session.sourcePid,
+    wtHwnd: session.wtHwnd,
+    cwd: session.cwd,
+    editor: null,
+    pidChain: session.pidChain,
+    tmuxSocket: session.tmuxSocket,
+    tmuxClient: session.tmuxClient,
+    ghosttyTerminalId: session.ghosttyTerminalId,
+    sessionId: String(sessionId),
+    agentId: session.agentId,
+    requestSource,
+  });
+}
+
 function focusDashboardSession(sessionId, options = {}) {
   if (!sessionId) return false;
   const requestSource = options.requestSource || "dashboard";
@@ -1528,6 +1548,18 @@ function focusDashboardSession(sessionId, options = {}) {
 
   const focusEntry = { ...(session || {}), ...(fallbackEntry || {}), id };
   const focusTarget = getSessionFocusTarget(focusEntry, { osPlatform: process.platform });
+  if (focusTarget.type === "codex-editor") {
+    focusCodexEditorTarget({
+      shell,
+      focusEntry,
+      sessionId: id,
+      requestSource,
+      focusLog,
+      focusEditorSessionWindow,
+      focusTerminalSession,
+    });
+    return true;
+  }
   if (focusTarget.type === "codex-thread" && focusTarget.url) {
     focusCodexThreadTarget({
       shell,
@@ -3396,7 +3428,7 @@ Object.defineProperties(this || {}, {}); // no-op placeholder
 
 // ── Auto-install VS Code / Cursor terminal-focus extension ──
 const EXT_ID = "clawd.clawd-terminal-focus";
-const EXT_VERSION = "0.1.1";
+const EXT_VERSION = "0.1.4";
 const EXT_DIR_NAME = `${EXT_ID}-${EXT_VERSION}`;
 
 function installTerminalFocusExtension() {
@@ -3414,6 +3446,7 @@ function installTerminalFocusExtension() {
 
   const targets = [
     path.join(home, ".vscode", "extensions"),
+    path.join(home, ".vscode-insiders", "extensions"),
     path.join(home, ".cursor", "extensions"),
   ];
 

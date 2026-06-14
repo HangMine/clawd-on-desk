@@ -11,6 +11,11 @@ function normalizeOsPlatform(options) {
   return normalizeString(options.osPlatform || options.focusHostPlatform).toLowerCase();
 }
 
+function normalizeEditor(value) {
+  const text = normalizeString(value).toLowerCase();
+  return text === "code" || text === "cursor" ? text : "";
+}
+
 function getCodexThreadId(entry) {
   if (!entry || entry.agentId !== "codex") return null;
   const originator = normalizeString(entry.codexOriginator || entry.originator).toLowerCase();
@@ -27,6 +32,10 @@ function getCodexThreadUrl(entry) {
 function getSessionFocusTarget(entry, options = {}) {
   if (!entry || !entry.id) return { canFocus: false, type: null, url: null };
   if (entry.host || entry.platform === "webui") return { canFocus: false, type: null, url: null };
+
+  if (entry.agentId === "codex" && entry.sourcePid && normalizeEditor(entry.editor)) {
+    return { canFocus: true, type: "codex-editor", url: null };
+  }
 
   const codexThreadUrl = getCodexThreadUrl(entry);
   if (codexThreadUrl) {
