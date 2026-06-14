@@ -1678,6 +1678,8 @@ const _serverCtx = {
   addPendingPermission,
   removePendingPermission,
   showPermissionBubble,
+  showCodexNotifyBubble,
+  clearCodexNotifyBubbles,
   maybeStartRemoteApproval,
   replyOpencodePermission,
   permLog,

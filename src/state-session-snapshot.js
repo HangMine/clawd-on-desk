@@ -27,6 +27,7 @@ const EVENT_LABEL_KEYS = {
   PostCompact: "eventLabelPostCompact",
   Notification: "eventLabelNotification",
   Elicitation: "eventLabelElicitation",
+  CodexAwaitingUserAction: "eventLabelCodexAwaitingUserAction",
   WorktreeCreate: "eventLabelWorktreeCreate",
   "event_msg:task_complete": "eventLabelStop",
   "stale-cleanup": "eventLabelStaleCleanup",

@@ -46,19 +46,25 @@ function callStatePost(body, overrides = {}) {
     const calls = {
       updateSession: [],
       setState: [],
+      showCodexNotifyBubble: [],
+      clearCodexNotifyBubbles: [],
       recorder: [],
       resolved: [],
     };
     const ctx = {
       STATE_SVGS: {
         working: "x.svg",
+        thinking: "x.svg",
         attention: "x.svg",
+        notification: "x.svg",
         "mini-idle": "x.svg",
       },
       pendingPermissions: [],
       isAgentEnabled: () => true,
       setState: (...args) => calls.setState.push(args),
       updateSession: (...args) => calls.updateSession.push(args),
+      showCodexNotifyBubble: (...args) => calls.showCodexNotifyBubble.push(args),
+      clearCodexNotifyBubbles: (...args) => calls.clearCodexNotifyBubbles.push(args),
       resolvePermissionEntry: (perm, behavior, message) => calls.resolved.push({ perm, behavior, message }),
       ...overrides.ctx,
     };
@@ -176,6 +182,51 @@ describe("server-route-state POST", () => {
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.calls.updateSession[0][3].assistantLastOutput, "Done.\nsecret=abc123");
     assert.strictEqual(res.calls.updateSession[0][3].assistantLastOutputTruncated, true);
+  });
+
+  it("shows a sticky Codex awaiting-user bubble for remote waiting notifications", async () => {
+    const res = await callStatePost(JSON.stringify({
+      state: "notification",
+      session_id: "codex:remote",
+      event: "CodexAwaitingUserAction",
+      agent_id: "codex",
+      cwd: "/repo",
+      host: "remote-box",
+      awaiting_user_reason: "plan-review",
+      awaiting_user_message: "Please review the plan.",
+    }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.calls.updateSession[0].slice(0, 3), [
+      "codex:remote",
+      "notification",
+      "CodexAwaitingUserAction",
+    ]);
+    assert.deepStrictEqual(res.calls.showCodexNotifyBubble, [[{
+      sessionId: "codex:remote",
+      kind: "awaiting-user",
+      reason: "plan-review",
+      message: "Please review the plan.",
+      sticky: true,
+    }]]);
+    assert.deepStrictEqual(res.calls.clearCodexNotifyBubbles, []);
+  });
+
+  it("clears Codex notify bubbles on later remote Codex state updates", async () => {
+    const res = await callStatePost(JSON.stringify({
+      state: "thinking",
+      session_id: "codex:remote",
+      event: "UserPromptSubmit",
+      agent_id: "codex",
+      cwd: "/repo",
+      host: "remote-box",
+    }));
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.deepStrictEqual(res.calls.clearCodexNotifyBubbles, [[
+      "codex:remote",
+      "codex-state-transition:thinking",
+    ]]);
   });
 
   it("passes valid context_usage to updateSession", async () => {

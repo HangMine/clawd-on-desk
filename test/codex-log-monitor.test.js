@@ -299,6 +299,442 @@ describe("CodexLogMonitor", () => {
     monitor.start();
   });
 
+  it("emits codex-awaiting-user for proposed plan output on task_complete", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    const planText = "<proposed_plan>\n# Plan\n1. Update the monitor.\n2. Add tests.\n</proposed_plan>";
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "turn_context", payload: { collaboration_mode: { mode: "plan" } } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: planText }],
+        },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    const awaiting = events.find((entry) => entry.event === "CodexAwaitingUserAction");
+    assert.ok(awaiting, `expected awaiting event, got ${JSON.stringify(events.map((entry) => entry.event))}`);
+    assert.strictEqual(awaiting.state, "codex-awaiting-user");
+    assert.deepStrictEqual(awaiting.extra.awaitingUserAction, {
+      kind: "plan-review",
+      reason: "plan-review",
+      text: planText,
+      textTruncated: false,
+    });
+  });
+
+  it("does not emit codex-awaiting-user for ordinary plan-mode confirmation replies", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "turn_context", payload: { collaboration_mode: { mode: "plan" } } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Good, the waiting-state flow is working now." }],
+        },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.strictEqual(events.some((entry) => entry.event === "CodexAwaitingUserAction"), false);
+    const complete = events.find((entry) => entry.event === "event_msg:task_complete");
+    assert.ok(complete);
+    assert.strictEqual(complete.state, "idle");
+    assert.strictEqual(complete.extra.assistantLastOutput, "Good, the waiting-state flow is working now.");
+  });
+
+  it("does not emit codex-awaiting-user when ordinary plan-mode text mentions the proposed plan open tag", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    const text = "Docs may mention <proposed_plan> inline without starting a plan block.";
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "turn_context", payload: { collaboration_mode: { mode: "plan" } } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text }],
+        },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.strictEqual(events.some((entry) => entry.event === "CodexAwaitingUserAction"), false);
+    const complete = events.find((entry) => entry.event === "event_msg:task_complete");
+    assert.ok(complete);
+    assert.strictEqual(complete.state, "idle");
+    assert.strictEqual(complete.extra.assistantLastOutput, text);
+  });
+
+  it("does not emit codex-awaiting-user when ordinary plan-mode text mentions both proposed plan tags inline", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    const text = "Docs may mention <proposed_plan> and </proposed_plan> inline without starting a plan block.";
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "turn_context", payload: { collaboration_mode: { mode: "plan" } } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text }],
+        },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.strictEqual(events.some((entry) => entry.event === "CodexAwaitingUserAction"), false);
+    const complete = events.find((entry) => entry.event === "event_msg:task_complete");
+    assert.ok(complete);
+    assert.strictEqual(complete.state, "idle");
+    assert.strictEqual(complete.extra.assistantLastOutput, text);
+  });
+
+  it("does not emit codex-awaiting-user for ordinary non-plan completion", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "Implemented the requested change." } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.strictEqual(events.some((entry) => entry.event === "CodexAwaitingUserAction"), false);
+    const complete = events.find((entry) => entry.event === "event_msg:task_complete");
+    assert.ok(complete);
+    assert.strictEqual(complete.state, "idle");
+    assert.strictEqual(complete.extra.assistantLastOutput, "Implemented the requested change.");
+  });
+
+  it("emits assistant-question awaiting-user for explicit non-plan confirmation cues", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "agent_message", message: "Please confirm which option to use before I continue." },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    const awaiting = events.find((entry) => entry.event === "CodexAwaitingUserAction");
+    assert.ok(awaiting);
+    assert.strictEqual(awaiting.extra.awaitingUserAction.kind, "assistant-question");
+    assert.strictEqual(awaiting.extra.awaitingUserAction.reason, "assistant-question");
+  });
+
+  it("emits assistant-question awaiting-user for explicit Chinese confirmation cues", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "agent_message", message: "\u8bf7\u786e\u8ba4\u662f\u5426\u7ee7\u7eed\u3002" },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    const awaiting = events.find((entry) => entry.event === "CodexAwaitingUserAction");
+    assert.ok(awaiting);
+    assert.strictEqual(awaiting.extra.awaitingUserAction.kind, "assistant-question");
+    assert.strictEqual(awaiting.extra.awaitingUserAction.reason, "assistant-question");
+  });
+
+  it("emits codex-awaiting-user immediately for request_user_input function calls", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "request_user_input",
+          call_id: "call_wait",
+          arguments: JSON.stringify({
+            questions: [{
+              id: "interrupt_test_choice",
+              question: "这是一个计划模式等待输入测试，请随便选一个。",
+            }],
+          }),
+        },
+      }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.deepStrictEqual(events.map((entry) => entry.state), ["idle", "thinking", "codex-awaiting-user"]);
+    const awaiting = events[2];
+    assert.strictEqual(awaiting.event, "CodexAwaitingUserAction");
+    assert.deepStrictEqual(awaiting.extra.awaitingUserAction, {
+      kind: "request-user-input",
+      reason: "request-user-input",
+      text: "这是一个计划模式等待输入测试，请随便选一个。",
+      textTruncated: false,
+    });
+  });
+
+  it("clears request_user_input waiting as working after the user answers", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "request_user_input",
+          call_id: "call_wait",
+          arguments: JSON.stringify({ questions: [{ question: "Pick one." }] }),
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_wait",
+          output: JSON.stringify({ interrupt_test_choice: "确认" }),
+        },
+      }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event) => {
+      events.push({ state, event });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.deepStrictEqual(events.map((entry) => entry.state), ["idle", "thinking", "codex-awaiting-user", "working"]);
+    assert.strictEqual(events[3].event, "response_item:function_call_output");
+  });
+
+  it("does not reopen waiting for a plain plan-mode reply after request_user_input resolves", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "turn_context", payload: { collaboration_mode: { mode: "plan" } } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "request_user_input",
+          call_id: "call_wait",
+          arguments: JSON.stringify({ questions: [{ question: "Can you see this choice?" }] }),
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_wait",
+          output: JSON.stringify({ choice: "yes" }),
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Good, this flow is working now." }],
+        },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event, extra) => {
+      events.push({ state, event, extra });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    const awaitingEvents = events.filter((entry) => entry.event === "CodexAwaitingUserAction");
+    assert.strictEqual(awaitingEvents.length, 1);
+    assert.deepStrictEqual(events.map((entry) => entry.state), [
+      "idle",
+      "thinking",
+      "codex-awaiting-user",
+      "working",
+      "idle",
+    ]);
+    const complete = events.at(-1);
+    assert.strictEqual(complete.event, "event_msg:task_complete");
+    assert.strictEqual(complete.extra.assistantLastOutput, "Good, this flow is working now.");
+  });
+
+  it("clears request_user_input waiting as idle after a user abort", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call",
+          name: "request_user_input",
+          call_id: "call_wait",
+          arguments: JSON.stringify({ questions: [{ question: "Pick one." }] }),
+        },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: {
+          type: "function_call_output",
+          call_id: "call_wait",
+          output: "aborted by user after 38.8s",
+        },
+      }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event) => {
+      events.push({ state, event });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.deepStrictEqual(events.map((entry) => entry.state), ["idle", "thinking", "codex-awaiting-user", "idle"]);
+    assert.strictEqual(events[3].event, "response_item:function_call_output");
+  });
+
+  it("does not trigger request_user_input waiting from context text alone", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({
+        type: "turn_context",
+        payload: {
+          collaboration_mode: { mode: "plan" },
+          settings: { developer_instructions: "Use request_user_input when asking questions." },
+        },
+      }),
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event) => {
+      events.push({ state, event });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.strictEqual(events.some((entry) => entry.event === "CodexAwaitingUserAction"), false);
+  });
+
+  it("does not emit awaiting-user from assistant messages followed by more tool work", () => {
+    const testFile = path.join(dateDir, TEST_FILENAME);
+    fs.writeFileSync(testFile, [
+      JSON.stringify({ type: "session_meta", payload: { cwd: "/tmp" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_started" } }),
+      JSON.stringify({
+        type: "event_msg",
+        payload: { type: "agent_message", message: "Please confirm which option to use before I continue." },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        payload: { type: "function_call", name: "shell_command", arguments: "{\"command\":\"npm test\"}" },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "exec_command_end" } }),
+      JSON.stringify({ type: "event_msg", payload: { type: "task_complete" } }),
+    ].join("\n") + "\n");
+
+    const config = makeConfig(tmpDir);
+    const events = [];
+    monitor = new CodexLogMonitor(config, (sid, state, event) => {
+      events.push({ state, event });
+    });
+
+    monitor._pollFile(testFile, path.basename(testFile));
+
+    assert.strictEqual(events.some((entry) => entry.event === "CodexAwaitingUserAction"), false);
+    const complete = events.find((entry) => entry.event === "event_msg:task_complete");
+    assert.ok(complete);
+    assert.strictEqual(complete.state, "attention");
+  });
+
   it("marks subagent emits headless and resolves task_complete to idle", (_, done) => {
     const testFile = path.join(dateDir, TEST_FILENAME);
     fs.writeFileSync(testFile, [

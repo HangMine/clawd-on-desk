@@ -286,6 +286,22 @@ function handleStatePost(req, res, options) {
             stopHookActive,
             ...(agentIdentity.defaulted ? { agentIdDefaulted: true } : {}),
           });
+          if (
+            agentId === "codex"
+            && event === "CodexAwaitingUserAction"
+            && state === "notification"
+            && typeof ctx.showCodexNotifyBubble === "function"
+          ) {
+            ctx.showCodexNotifyBubble({
+              sessionId: sid,
+              kind: "awaiting-user",
+              reason: typeof data.awaiting_user_reason === "string" ? data.awaiting_user_reason : "",
+              message: typeof data.awaiting_user_message === "string" ? data.awaiting_user_message : "",
+              sticky: true,
+            });
+          } else if (agentId === "codex" && typeof ctx.clearCodexNotifyBubbles === "function") {
+            ctx.clearCodexNotifyBubbles(sid, `codex-state-transition:${state}`);
+          }
         }
         res.writeHead(200, { [CLAWD_SERVER_HEADER]: CLAWD_SERVER_ID });
         res.end("ok");

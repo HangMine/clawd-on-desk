@@ -121,6 +121,7 @@ describe("agent-runtime-main", () => {
         agentId: "codex",
         hookSource: "codex-official",
       }],
+      ["clear", "codex:abc", "codex-user-prompt-submit"],
       ["update", "codex:abc", "idle", "event_msg:task_complete", {
         cwd: "D:\\repo",
         agentId: "codex",
@@ -246,6 +247,16 @@ describe("agent-runtime-main", () => {
       headless: true,
       permissionDetail: { command: "npm test" },
     });
+    monitor.emit("sid", "codex-awaiting-user", "CodexAwaitingUserAction", {
+      cwd: "D:\\repo",
+      sessionTitle: "Run tests",
+      headless: true,
+      awaitingUserAction: {
+        kind: "plan-review",
+        reason: "plan-review",
+        text: "Please review the plan.",
+      },
+    });
     monitor.emit("sid", "working", "response_item:web_search_call", {
       cwd: "D:\\repo",
       sessionTitle: "Run tests",
@@ -259,6 +270,23 @@ describe("agent-runtime-main", () => {
         sessionTitle: "Run tests",
       }],
       ["notify", { sessionId: "sid", command: "npm test" }],
+      ["update", "sid", "notification", "CodexAwaitingUserAction", {
+        cwd: "D:\\repo",
+        agentId: "codex",
+        sessionTitle: "Run tests",
+        awaitingUserAction: {
+          kind: "plan-review",
+          reason: "plan-review",
+          text: "Please review the plan.",
+        },
+      }],
+      ["notify", {
+        sessionId: "sid",
+        kind: "awaiting-user",
+        reason: "plan-review",
+        message: "Please review the plan.",
+        sticky: true,
+      }],
       ["clear", "sid", "codex-state-transition:working"],
       ["update", "sid", "working", "response_item:web_search_call", {
         cwd: "D:\\repo",
@@ -423,6 +451,62 @@ describe("agent-runtime-main", () => {
     }
   });
 
+  it("treats a local Codex awaiting-user notification hold as rescuable", () => {
+    const sessions = new Map();
+    const runtime = createAgentRuntimeMain({
+      codexSubagentClassifier: {},
+      getStateRuntime: () => ({ sessions }),
+    });
+    runtime.markCodexOfficialHookSession("codex:s1");
+
+    sessions.set("codex:s1", {
+      agentId: "codex",
+      state: "notification",
+      recentEvents: [
+        { event: "CodexAwaitingUserAction", state: "notification", at: 1000 },
+        { event: "event_msg:token_count", state: "notification", at: 1001 },
+      ],
+    });
+
+    assert.equal(
+      runtime.shouldSuppressCodexLogEvent("codex:s1", "idle", "event_msg:task_complete"),
+      false
+    );
+    assert.equal(
+      runtime.shouldSuppressCodexLogEvent("codex:s1", "attention", "event_msg:task_complete"),
+      false
+    );
+  });
+
+  it("does not rescue ordinary or permission Codex notification states", () => {
+    const sessions = new Map();
+    const runtime = createAgentRuntimeMain({
+      codexSubagentClassifier: {},
+      getStateRuntime: () => ({ sessions }),
+    });
+    runtime.markCodexOfficialHookSession("codex:s1");
+
+    sessions.set("codex:s1", {
+      agentId: "codex",
+      state: "notification",
+      recentEvents: [{ event: "Notification", state: "notification", at: 1000 }],
+    });
+    assert.equal(
+      runtime.shouldSuppressCodexLogEvent("codex:s1", "idle", "event_msg:task_complete"),
+      true
+    );
+
+    sessions.set("codex:s1", {
+      agentId: "codex",
+      state: "notification",
+      recentEvents: [{ event: "PermissionRequest", state: "notification", at: 1000 }],
+    });
+    assert.equal(
+      runtime.shouldSuppressCodexLogEvent("codex:s1", "attention", "event_msg:task_complete"),
+      true
+    );
+  });
+
   it("keeps suppressing JSONL task_complete once the official Stop has idled the session", () => {
     const sessions = new Map();
     const runtime = createAgentRuntimeMain({
@@ -454,9 +538,23 @@ describe("agent-runtime-main", () => {
     });
     runtime.markCodexOfficialHookSession("codex:remote");
     runtime.markCodexOfficialHookSession("codex:headless");
+    runtime.markCodexOfficialHookSession("codex:remote-wait");
+    runtime.markCodexOfficialHookSession("codex:headless-wait");
 
     sessions.set("codex:remote", { agentId: "codex", state: "working", host: "ssh:example" });
     sessions.set("codex:headless", { agentId: "codex", state: "working", headless: true });
+    sessions.set("codex:remote-wait", {
+      agentId: "codex",
+      state: "notification",
+      host: "ssh:example",
+      recentEvents: [{ event: "CodexAwaitingUserAction", state: "notification", at: 1000 }],
+    });
+    sessions.set("codex:headless-wait", {
+      agentId: "codex",
+      state: "notification",
+      headless: true,
+      recentEvents: [{ event: "CodexAwaitingUserAction", state: "notification", at: 1000 }],
+    });
 
     assert.equal(
       runtime.shouldSuppressCodexLogEvent("codex:remote", "idle", "event_msg:task_complete"),
@@ -464,6 +562,14 @@ describe("agent-runtime-main", () => {
     );
     assert.equal(
       runtime.shouldSuppressCodexLogEvent("codex:headless", "attention", "event_msg:task_complete"),
+      true
+    );
+    assert.equal(
+      runtime.shouldSuppressCodexLogEvent("codex:remote-wait", "idle", "event_msg:task_complete"),
+      true
+    );
+    assert.equal(
+      runtime.shouldSuppressCodexLogEvent("codex:headless-wait", "attention", "event_msg:task_complete"),
       true
     );
   });
@@ -545,5 +651,45 @@ describe("agent-runtime-main", () => {
       sessionTitle: "Codex turn",
     });
     assert.deepStrictEqual(calls, []);
+  });
+
+  it("lets the JSONL monitor release a stuck Codex awaiting-user notification hold", () => {
+    const instances = [];
+    const calls = [];
+    const sessions = new Map();
+    const FakeMonitor = makeFakeMonitorClass(instances);
+    const runtime = createAgentRuntimeMain({
+      loadCodexLogMonitor: () => FakeMonitor,
+      loadCodexAgent: () => ({ id: "codex" }),
+      codexSubagentClassifier: {},
+      isAgentEnabled: (agentId) => agentId === "codex",
+      getStateRuntime: () => ({ sessions }),
+      updateSession: (...args) => calls.push(["update", ...args]),
+      showCodexNotifyBubble: (...args) => calls.push(["notify", ...args]),
+      clearCodexNotifyBubbles: (...args) => calls.push(["clear", ...args]),
+    });
+
+    const monitor = runtime.startCodexLogMonitor();
+    runtime.markCodexOfficialHookSession("codex:s1");
+    sessions.set("codex:s1", {
+      agentId: "codex",
+      state: "notification",
+      recentEvents: [{ event: "CodexAwaitingUserAction", state: "notification", at: 1000 }],
+    });
+
+    monitor.emit("codex:s1", "idle", "event_msg:task_complete", {
+      cwd: "D:\\repo",
+      sessionTitle: "Codex wait",
+    });
+
+    assert.deepStrictEqual(calls, [
+      ["clear", "codex:s1", "codex-state-transition:idle"],
+      ["update", "codex:s1", "idle", "event_msg:task_complete", {
+        cwd: "D:\\repo",
+        agentId: "codex",
+        sessionTitle: "Codex wait",
+        headless: false,
+      }],
+    ]);
   });
 });

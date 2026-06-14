@@ -39,7 +39,14 @@ const ACTIVE_SESSION_WINDOW_MS = 5 * 60 * 1000;
 // replay it silently (backfill) instead of emitting stale transitions. A
 // file written within the grace window is a live session and emits normally.
 const BACKFILL_GRACE_MS = 5 * 1000;
-const BACKFILL_SNAPSHOT_STATES = new Set(["thinking", "working", "codex-permission"]);
+const BACKFILL_SNAPSHOT_STATES = new Set(["thinking", "working", "codex-permission", "codex-awaiting-user"]);
+const CODEX_AWAITING_USER_EVENT = "CodexAwaitingUserAction";
+const CODEX_PLAN_MODE = "plan";
+const CODEX_REQUEST_USER_INPUT_TOOL = "request_user_input";
+
+const ASSISTANT_QUESTION_RE = /(?:\b(?:please\s+(?:confirm|choose|select|review|reply|tell me|let me know)|(?:do you want|would you like|should i|shall i|can you confirm|could you confirm)\b|(?:confirm|choose|select|approve|review)\s+(?:one|an option|the plan|this plan)|which\s+(?:option|approach)|reply\s+with)\b|(?:\u8bf7\s*(?:\u9009\u62e9|\u786e\u8ba4|\u56de\u590d)|\u662f\u5426|\u8981\u4e0d\u8981|\u9700\u8981\u4f60\s*(?:\u9009\u62e9|\u786e\u8ba4|\u56de\u590d)|\u56de\u590d\s*(?:\u9009\u9879|\u4e00\u4e2a\u9009\u9879)))/i;
+const PROPOSED_PLAN_RE = /(?:^|\r?\n)[ \t]*<proposed_plan>[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*<\/proposed_plan>[ \t]*(?:\r?\n|$)/i;
+const REQUEST_USER_INPUT_ABORT_RE = /\baborted by user\b/i;
 
 function finiteNonnegativeNumber(value) {
   const n = Number(value);
@@ -346,6 +353,11 @@ class CodexLogMonitor {
         isSubagent: retired ? retired.isSubagent === true : false,
         agentPid: retired ? retired.agentPid : null,
         pendingApprovalDetail: null,
+        pendingAwaitingUserAction: retired ? retired.pendingAwaitingUserAction || null : null,
+        pendingAwaitingUserInputCallId: retired ? retired.pendingAwaitingUserInputCallId || null : null,
+        currentCollaborationMode: retired ? retired.currentCollaborationMode || null : null,
+        turnCollaborationMode: retired ? retired.turnCollaborationMode || null : null,
+        turnActive: false,
         assistantLastOutput: retired ? retired.assistantLastOutput || null : null,
         assistantLastOutputTruncated: retired ? retired.assistantLastOutputTruncated === true : false,
         contextUsage: retired ? retired.contextUsage || null : null,
@@ -418,6 +430,12 @@ class CodexLogMonitor {
     // Build lookup key
     const key = subtype ? type + ":" + subtype : type;
 
+    const collaborationMode = this._extractCollaborationMode(obj);
+    if (collaborationMode) {
+      tracked.currentCollaborationMode = collaborationMode;
+      if (tracked.turnActive) tracked.turnCollaborationMode = collaborationMode;
+    }
+
     // Metadata is needed for future live writes even when the session_meta
     // record itself predates monitor start.
     if (type === "session_meta") {
@@ -480,6 +498,25 @@ class CodexLogMonitor {
         tracked.lastState = "working";
       }
     }
+    if (this._clearsAwaitingUserAction(key)) {
+      tracked.pendingAwaitingUserAction = null;
+      tracked.pendingAwaitingUserInputCallId = null;
+    }
+
+    if (key === "response_item:function_call_output" && this._isAwaitingUserInputOutput(tracked, payload)) {
+      const resolved = this._resolveAwaitingUserInputOutputState(payload);
+      tracked.pendingAwaitingUserAction = null;
+      tracked.pendingAwaitingUserInputCallId = null;
+      tracked.lastState = resolved;
+      tracked.lastStateEvent = key;
+      if (resolved === "idle") {
+        tracked.turnActive = false;
+        tracked.hadToolUse = false;
+      }
+      if (tracked.backfilling) return;
+      this._emitStateChange(tracked, resolved, key);
+      return;
+    }
 
     // Look up state mapping
     const map = this._config.logEventMap;
@@ -490,12 +527,41 @@ class CodexLogMonitor {
 
     // Track tool use per turn — reset on task_started, set on function_call
     if (key === "event_msg:task_started") {
+      tracked.turnActive = true;
+      tracked.turnCollaborationMode = tracked.currentCollaborationMode || null;
       tracked.hadToolUse = false;
+      tracked.pendingAwaitingUserAction = null;
+      tracked.pendingAwaitingUserInputCallId = null;
       tracked.assistantLastOutput = null;
       tracked.assistantLastOutputTruncated = false;
     }
+    if (key === "response_item:function_call" && this._isRequestUserInputCall(payload)) {
+      const awaitingUserAction = this._buildRequestUserInputAwaitingAction(payload);
+      tracked.pendingAwaitingUserAction = awaitingUserAction;
+      tracked.pendingAwaitingUserInputCallId = typeof payload.call_id === "string" ? payload.call_id : null;
+      tracked.assistantLastOutput = null;
+      tracked.assistantLastOutputTruncated = false;
+      tracked.lastState = "codex-awaiting-user";
+      tracked.lastStateEvent = CODEX_AWAITING_USER_EVENT;
+      if (tracked.backfilling) return;
+      this._emitStateChange(
+        tracked,
+        "codex-awaiting-user",
+        CODEX_AWAITING_USER_EVENT,
+        { awaitingUserAction }
+      );
+      return;
+    }
     if (key === "response_item:function_call") {
       tracked.hadToolUse = true;
+    }
+    if (
+      key === "response_item:function_call"
+      || key === "response_item:custom_tool_call"
+      || key === "response_item:web_search_call"
+    ) {
+      tracked.assistantLastOutput = null;
+      tracked.assistantLastOutputTruncated = false;
     }
 
     // Turn-end: happy if tools were used this turn, idle otherwise
@@ -505,10 +571,30 @@ class CodexLogMonitor {
         tracked.approvalTimer = null;
       }
       tracked.pendingApprovalDetail = null;
+      const awaitingUserAction = this._detectAwaitingUserAction(tracked);
+      if (awaitingUserAction) {
+        tracked.hadToolUse = false;
+        tracked.turnActive = false;
+        tracked.lastState = "codex-awaiting-user";
+        tracked.lastStateEvent = CODEX_AWAITING_USER_EVENT;
+        tracked.pendingAwaitingUserAction = awaitingUserAction;
+        tracked.pendingAwaitingUserInputCallId = null;
+        if (tracked.backfilling) return;
+        this._emitStateChange(
+          tracked,
+          "codex-awaiting-user",
+          CODEX_AWAITING_USER_EVENT,
+          { awaitingUserAction }
+        );
+        return;
+      }
       const resolved = this._isTrackedSubagent(tracked)
         ? "idle"
         : (tracked.hadToolUse ? "attention" : "idle");
       tracked.hadToolUse = false;
+      tracked.turnActive = false;
+      tracked.pendingAwaitingUserAction = null;
+      tracked.pendingAwaitingUserInputCallId = null;
       tracked.lastState = resolved;
       if (tracked.backfilling) return;
       this._emitStateChange(tracked, resolved, key, this._assistantOutputExtra(tracked));
@@ -589,6 +675,110 @@ class CodexLogMonitor {
       if (summary && summary !== "none" && summary !== "auto") return summary;
     }
     return null;
+  }
+
+  _extractCollaborationMode(obj) {
+    if (!obj || obj.type !== "turn_context") return null;
+    const payload = obj.payload && typeof obj.payload === "object" ? obj.payload : null;
+    const mode = payload
+      && payload.collaboration_mode
+      && typeof payload.collaboration_mode === "object"
+      && typeof payload.collaboration_mode.mode === "string"
+      ? payload.collaboration_mode.mode.trim()
+      : "";
+    return mode || null;
+  }
+
+  _clearsAwaitingUserAction(key) {
+    return key === "event_msg:task_started"
+      || key === "event_msg:user_message"
+      || key === "event_msg:turn_aborted"
+      || key === "response_item:function_call"
+      || key === "response_item:custom_tool_call"
+      || key === "response_item:web_search_call";
+  }
+
+  _detectAwaitingUserAction(tracked) {
+    if (!tracked || this._isTrackedSubagent(tracked)) return null;
+    const text = typeof tracked.assistantLastOutput === "string"
+      ? tracked.assistantLastOutput.trim()
+      : "";
+    if (!text) return null;
+    const mode = tracked.turnCollaborationMode || tracked.currentCollaborationMode || "";
+    if (mode === CODEX_PLAN_MODE && PROPOSED_PLAN_RE.test(text)) {
+      return {
+        kind: "plan-review",
+        reason: "plan-review",
+        text,
+        textTruncated: tracked.assistantLastOutputTruncated === true,
+      };
+    }
+    if (ASSISTANT_QUESTION_RE.test(text)) {
+      return {
+        kind: "assistant-question",
+        reason: "assistant-question",
+        text,
+        textTruncated: tracked.assistantLastOutputTruncated === true,
+      };
+    }
+    return null;
+  }
+
+  _isRequestUserInputCall(payload) {
+    return !!(
+      payload
+      && typeof payload === "object"
+      && payload.name === CODEX_REQUEST_USER_INPUT_TOOL
+    );
+  }
+
+  _parseFunctionArguments(payload) {
+    if (!payload || typeof payload !== "object") return null;
+    const raw = payload.arguments;
+    if (!raw) return null;
+    if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+    if (typeof raw !== "string") return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch {}
+    return null;
+  }
+
+  _extractRequestUserInputText(payload) {
+    const args = this._parseFunctionArguments(payload);
+    const questions = args && Array.isArray(args.questions) ? args.questions : [];
+    const texts = [];
+    for (const question of questions) {
+      if (!question || typeof question !== "object") continue;
+      const text = typeof question.question === "string" ? question.question.trim() : "";
+      if (text) texts.push(text);
+    }
+    if (texts.length) return texts.join("\n\n");
+    return "Codex is asking for your input.";
+  }
+
+  _buildRequestUserInputAwaitingAction(payload) {
+    return {
+      kind: "request-user-input",
+      reason: "request-user-input",
+      text: this._extractRequestUserInputText(payload),
+      textTruncated: false,
+    };
+  }
+
+  _isAwaitingUserInputOutput(tracked, payload) {
+    if (!tracked || !tracked.pendingAwaitingUserInputCallId) return false;
+    return !!(
+      payload
+      && typeof payload === "object"
+      && payload.call_id === tracked.pendingAwaitingUserInputCallId
+    );
+  }
+
+  _resolveAwaitingUserInputOutputState(payload) {
+    const output = payload && typeof payload.output === "string" ? payload.output : "";
+    return REQUEST_USER_INPUT_ABORT_RE.test(output) ? "idle" : "working";
   }
 
   // Extract shell command from function_call payload
@@ -718,6 +908,10 @@ class CodexLogMonitor {
       hadToolUse: tracked.hadToolUse === true,
       isSubagent: tracked.isSubagent === true,
       agentPid: tracked.agentPid || null,
+      pendingAwaitingUserAction: tracked.pendingAwaitingUserAction || null,
+      pendingAwaitingUserInputCallId: tracked.pendingAwaitingUserInputCallId || null,
+      currentCollaborationMode: tracked.currentCollaborationMode || null,
+      turnCollaborationMode: tracked.turnCollaborationMode || null,
       assistantLastOutput: tracked.assistantLastOutput || null,
       assistantLastOutputTruncated: tracked.assistantLastOutputTruncated === true,
       contextUsage: tracked.contextUsage || null,
@@ -736,9 +930,12 @@ class CodexLogMonitor {
       }
       return;
     }
-    const extra = snapshotState === "codex-permission" && tracked.pendingApprovalDetail
-      ? { permissionDetail: tracked.pendingApprovalDetail }
-      : null;
+    let extra = null;
+    if (snapshotState === "codex-permission" && tracked.pendingApprovalDetail) {
+      extra = { permissionDetail: tracked.pendingApprovalDetail };
+    } else if (snapshotState === "codex-awaiting-user" && tracked.pendingAwaitingUserAction) {
+      extra = { awaitingUserAction: tracked.pendingAwaitingUserAction };
+    }
     this._emitStateChange(
       tracked,
       snapshotState,

@@ -4,6 +4,10 @@ function isCodexMonitorPermissionEvent(state) {
   return state === "codex-permission";
 }
 
+function isCodexMonitorAwaitingUserEvent(state) {
+  return state === "codex-awaiting-user";
+}
+
 function isCodexMonitorMetadataOnlyEvent(event, extra) {
   return event === "event_msg:token_count"
     && !!(extra && typeof extra === "object" && extra.contextUsage);
@@ -38,6 +42,9 @@ function buildCodexMonitorUpdateOptions(extra, options = {}) {
   if (Object.prototype.hasOwnProperty.call(input, "pidChain")) out.pidChain = input.pidChain;
   if (Object.prototype.hasOwnProperty.call(input, "codexOriginator")) out.codexOriginator = input.codexOriginator;
   if (Object.prototype.hasOwnProperty.call(input, "codexSource")) out.codexSource = input.codexSource;
+  if (input.awaitingUserAction && typeof input.awaitingUserAction === "object") {
+    out.awaitingUserAction = input.awaitingUserAction;
+  }
   const contextUsage = normalizeContextUsage(input.contextUsage);
   if (contextUsage) out.contextUsage = contextUsage;
   if (options.includeHeadless) out.headless = input.headless === true;
@@ -46,6 +53,7 @@ function buildCodexMonitorUpdateOptions(extra, options = {}) {
 
 module.exports = {
   buildCodexMonitorUpdateOptions,
+  isCodexMonitorAwaitingUserEvent,
   isCodexMonitorMetadataOnlyEvent,
   isCodexMonitorPermissionEvent,
 };

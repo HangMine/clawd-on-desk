@@ -847,6 +847,7 @@ function buildPermissionBubblePayload(permEntry) {
     // Provenance for the renderer: lets the bubble relabel Codex MCP tool calls
     // (issue #445) without touching approval semantics. Mirrors the flags above.
     isCodex: permEntry.isCodex || false,
+    isCodexNotify: permEntry.isCodexNotify || false,
     opencodeAlways: permEntry.opencodeAlwaysCandidates || [],
     opencodePatterns: permEntry.opencodePatterns || [],
     sessionFolder,
@@ -1513,6 +1514,11 @@ function handleDecide(event, behavior) {
   permLog(`IPC permission-decide: behavior=${behavior} matched=${!!perm}`);
   if (!perm) return;
   if (perm.isCodexNotify || perm.isKimiNotify) {
+    if (behavior === "deny-and-focus") {
+      dismissPassiveNotify(perm, "ipc-focus");
+      ctx.focusTerminalForSession(perm.sessionId, { fallbackEntry: buildPermissionFocusEntry(perm) });
+      return;
+    }
     dismissPassiveNotify(perm, "ipc-decide");
     return;
   }
@@ -1623,37 +1629,52 @@ function handleDecide(event, behavior) {
   }
 }
 
-function showCodexNotifyBubble({ sessionId, command }) {
+function showCodexNotifyBubble({ sessionId, command, kind, reason, message, sticky }) {
   if (shouldSuppressCodexNotifyBubble(ctx)) {
     const policy = getPolicy(ctx, "notification");
     permLog(`codex notify suppressed: session=${sessionId} dnd=${ctx.doNotDisturb} notificationEnabled=${policy.enabled}`);
     return;
   }
   const policy = getPolicy(ctx, "notification");
+  const isAwaitingUser = kind === "awaiting-user";
+  const toolName = isAwaitingUser ? "CodexAwaitingUserAction" : "CodexExec";
+  const toolInput = isAwaitingUser
+    ? {
+      command: message || "Codex is waiting for your input in the terminal.",
+      reason: reason || "awaiting-user",
+    }
+    : { command: command || "(unknown)" };
   const existing = findCodexNotifyEntryBySession(sessionId);
   if (existing) {
-    existing.toolInput = { command: command || "(unknown)" };
+    existing.toolName = toolName;
+    existing.toolInput = toolInput;
+    existing.sticky = sticky === true || isAwaitingUser;
     existing.createdAt = Date.now();
     permLog(`passive notify refresh: agent=codex session=${sessionId} autoCloseMs=${policy.autoCloseMs}`);
     syncPermissionBubbleContent(existing);
-    schedulePassiveNotifyAutoExpire(existing, policy.autoCloseMs);
+    if (existing.sticky && existing.autoExpireTimer) {
+      clearTimeout(existing.autoExpireTimer);
+      existing.autoExpireTimer = null;
+    }
+    if (!existing.sticky) schedulePassiveNotifyAutoExpire(existing, policy.autoCloseMs);
     return;
   }
   const permEntry = {
     res: null,
     abortHandler: null, suggestions: [],
     sessionId, bubble: null, hideTimer: null,
-    toolName: "CodexExec",
-    toolInput: { command: command || "(unknown)" },
+    toolName,
+    toolInput,
     resolvedSuggestion: null, createdAt: Date.now(),
     isElicitation: false, isCodexNotify: true,
     agentId: "codex",
     autoExpireTimer: null,
+    sticky: sticky === true || isAwaitingUser,
   };
   addPendingPermission(permEntry, "passive-added");
   showPermissionBubble(permEntry);
   permLog(`passive notify show: agent=codex session=${sessionId} autoCloseMs=${policy.autoCloseMs}`);
-  schedulePassiveNotifyAutoExpire(permEntry, policy.autoCloseMs);
+  if (!permEntry.sticky) schedulePassiveNotifyAutoExpire(permEntry, policy.autoCloseMs);
 }
 
 function showKimiNotifyBubble({ sessionId, command }) {
@@ -1713,6 +1734,13 @@ function dismissPassiveNotify(permEntry, reason = "unknown") {
 
 function schedulePassiveNotifyAutoExpire(permEntry, autoCloseMs, now = Date.now()) {
   if (!isPassiveNotifyEntry(permEntry)) return false;
+  if (permEntry.sticky === true) {
+    if (permEntry.autoExpireTimer) {
+      clearTimeout(permEntry.autoExpireTimer);
+      permEntry.autoExpireTimer = null;
+    }
+    return false;
+  }
   if (permEntry.autoExpireTimer) {
     clearTimeout(permEntry.autoExpireTimer);
     permEntry.autoExpireTimer = null;

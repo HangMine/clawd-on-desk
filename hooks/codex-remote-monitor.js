@@ -29,6 +29,12 @@ const {
 const SESSION_DIR = path.join(os.homedir(), ".codex", "sessions");
 const POLL_INTERVAL_MS = 1500;
 const STALE_MS = 300000;
+const CODEX_AWAITING_USER_EVENT = "CodexAwaitingUserAction";
+const CODEX_PLAN_MODE = "plan";
+const CODEX_REQUEST_USER_INPUT_TOOL = "request_user_input";
+const ASSISTANT_QUESTION_RE = /(?:\b(?:please\s+(?:confirm|choose|select|review|reply|tell me|let me know)|(?:do you want|would you like|should i|shall i|can you confirm|could you confirm)\b|(?:confirm|choose|select|approve|review)\s+(?:one|an option|the plan|this plan)|which\s+(?:option|approach)|reply\s+with)\b|(?:\u8bf7\s*(?:\u9009\u62e9|\u786e\u8ba4|\u56de\u590d)|\u662f\u5426|\u8981\u4e0d\u8981|\u9700\u8981\u4f60\s*(?:\u9009\u62e9|\u786e\u8ba4|\u56de\u590d)|\u56de\u590d\s*(?:\u9009\u9879|\u4e00\u4e2a\u9009\u9879)))/i;
+const PROPOSED_PLAN_RE = /(?:^|\r?\n)[ \t]*<proposed_plan>[ \t]*\r?\n[\s\S]*?\r?\n[ \t]*<\/proposed_plan>[ \t]*(?:\r?\n|$)/i;
+const REQUEST_USER_INPUT_ABORT_RE = /\baborted by user\b/i;
 
 // JSONL record type[:subtype] → pet state. This standalone remote monitor keeps
 // a zero-dep subset of agents/codex.js because it posts final states directly
@@ -100,6 +106,14 @@ function buildPostStateBody(sessionId, state, event, cwd, isSubagent, host, extr
     body.assistant_last_output = extra.assistantLastOutput;
     if (extra.assistantLastOutputTruncated === true) body.assistant_last_output_truncated = true;
   }
+  if (extra && extra.awaitingUserAction && typeof extra.awaitingUserAction === "object") {
+    body.awaiting_user_reason = typeof extra.awaitingUserAction.reason === "string"
+      ? extra.awaitingUserAction.reason
+      : "";
+    body.awaiting_user_message = typeof extra.awaitingUserAction.text === "string"
+      ? extra.awaitingUserAction.text
+      : "";
+  }
   return JSON.stringify(body);
 }
 
@@ -126,6 +140,12 @@ function processLine(line, entry, options = {}) {
     payload && typeof payload === "object" ? payload.type || "" : "";
   const key = subtype ? type + ":" + subtype : type;
 
+  const collaborationMode = extractCollaborationMode(obj);
+  if (collaborationMode) {
+    entry.currentCollaborationMode = collaborationMode;
+    if (entry.turnActive) entry.turnCollaborationMode = collaborationMode;
+  }
+
   // Extract CWD from session_meta
   if (type === "session_meta" && payload) {
     entry.cwd = payload.cwd || "";
@@ -139,12 +159,75 @@ function processLine(line, entry, options = {}) {
     entry.assistantLastOutputTruncated = !!(assistantOutput && assistantOutput.truncated);
   }
 
+  if (key === "response_item:function_call_output" && isAwaitingUserInputOutput(entry, payload)) {
+    const resolvedState = resolveAwaitingUserInputOutputState(payload);
+    entry.pendingAwaitingUserAction = null;
+    entry.pendingAwaitingUserInputCallId = null;
+    if (resolvedState === "idle") entry.turnActive = false;
+    entry.lastState = resolvedState;
+    entry.lastEventTime = Date.now();
+    entry.stale = false;
+    const postStateFn = typeof options.postState === "function" ? options.postState : postState;
+    postStateFn(entry.sessionId, resolvedState, key, entry.cwd, entry.isSubagent, null);
+    return;
+  }
+
   const state = LOG_EVENT_MAP[key];
   if (state === undefined || state === null) return;
-  const finalState = entry.isSubagent && state === "attention" ? "idle" : state;
+  let finalState = entry.isSubagent && state === "attention" ? "idle" : state;
+  let finalEvent = key;
+  let extra = null;
   if (key === "event_msg:task_started") {
+    entry.turnActive = true;
+    entry.turnCollaborationMode = entry.currentCollaborationMode || null;
+    entry.pendingAwaitingUserAction = null;
+    entry.pendingAwaitingUserInputCallId = null;
     entry.assistantLastOutput = null;
     entry.assistantLastOutputTruncated = false;
+  }
+  if (
+    key === "event_msg:user_message"
+    || key === "event_msg:turn_aborted"
+    || key === "response_item:function_call"
+    || key === "response_item:custom_tool_call"
+    || key === "response_item:web_search_call"
+  ) {
+    entry.pendingAwaitingUserAction = null;
+    entry.pendingAwaitingUserInputCallId = null;
+  }
+  if (key === "response_item:function_call" && isRequestUserInputCall(payload)) {
+    const awaitingUserAction = buildRequestUserInputAwaitingAction(payload);
+    finalState = "notification";
+    finalEvent = CODEX_AWAITING_USER_EVENT;
+    extra = { awaitingUserAction };
+    entry.pendingAwaitingUserAction = awaitingUserAction;
+    entry.pendingAwaitingUserInputCallId = typeof payload.call_id === "string" ? payload.call_id : null;
+    entry.assistantLastOutput = null;
+    entry.assistantLastOutputTruncated = false;
+  }
+  if (
+    key === "response_item:function_call"
+    || key === "response_item:custom_tool_call"
+    || key === "response_item:web_search_call"
+  ) {
+    entry.assistantLastOutput = null;
+    entry.assistantLastOutputTruncated = false;
+  }
+  if (key === "event_msg:task_complete") {
+    const awaitingUserAction = detectAwaitingUserAction(entry);
+    entry.turnActive = false;
+    if (awaitingUserAction) {
+      finalState = "notification";
+      finalEvent = CODEX_AWAITING_USER_EVENT;
+      extra = { awaitingUserAction };
+      entry.pendingAwaitingUserAction = awaitingUserAction;
+      entry.pendingAwaitingUserInputCallId = null;
+    } else if (entry.assistantLastOutput) {
+      extra = {
+        assistantLastOutput: entry.assistantLastOutput,
+        assistantLastOutputTruncated: entry.assistantLastOutputTruncated === true,
+      };
+    }
   }
 
   // Avoid spamming same state — but never swallow the event when the session
@@ -160,13 +243,89 @@ function processLine(line, entry, options = {}) {
   entry.stale = false;
 
   const postStateFn = typeof options.postState === "function" ? options.postState : postState;
-  const extra = key === "event_msg:task_complete" && entry.assistantLastOutput
-    ? {
-      assistantLastOutput: entry.assistantLastOutput,
-      assistantLastOutputTruncated: entry.assistantLastOutputTruncated === true,
-    }
-    : null;
-  postStateFn(entry.sessionId, finalState, key, entry.cwd, entry.isSubagent, extra);
+  postStateFn(entry.sessionId, finalState, finalEvent, entry.cwd, entry.isSubagent, extra);
+}
+
+function extractCollaborationMode(obj) {
+  if (!obj || obj.type !== "turn_context") return null;
+  const payload = obj.payload && typeof obj.payload === "object" ? obj.payload : null;
+  const mode = payload
+    && payload.collaboration_mode
+    && typeof payload.collaboration_mode === "object"
+    && typeof payload.collaboration_mode.mode === "string"
+    ? payload.collaboration_mode.mode.trim()
+    : "";
+  return mode || null;
+}
+
+function detectAwaitingUserAction(entry) {
+  if (!entry || entry.isSubagent) return null;
+  const text = typeof entry.assistantLastOutput === "string" ? entry.assistantLastOutput.trim() : "";
+  if (!text) return null;
+  const mode = entry.turnCollaborationMode || entry.currentCollaborationMode || "";
+  if (mode === CODEX_PLAN_MODE && PROPOSED_PLAN_RE.test(text)) {
+    return { kind: "plan-review", reason: "plan-review", text };
+  }
+  if (ASSISTANT_QUESTION_RE.test(text)) {
+    return { kind: "assistant-question", reason: "assistant-question", text };
+  }
+  return null;
+}
+
+function isRequestUserInputCall(payload) {
+  return !!(
+    payload
+    && typeof payload === "object"
+    && payload.name === CODEX_REQUEST_USER_INPUT_TOOL
+  );
+}
+
+function parseFunctionArguments(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload.arguments;
+  if (!raw) return null;
+  if (typeof raw === "object" && !Array.isArray(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {}
+  return null;
+}
+
+function extractRequestUserInputText(payload) {
+  const args = parseFunctionArguments(payload);
+  const questions = args && Array.isArray(args.questions) ? args.questions : [];
+  const texts = [];
+  for (const question of questions) {
+    if (!question || typeof question !== "object") continue;
+    const text = typeof question.question === "string" ? question.question.trim() : "";
+    if (text) texts.push(text);
+  }
+  if (texts.length) return texts.join("\n\n");
+  return "Codex is asking for your input.";
+}
+
+function buildRequestUserInputAwaitingAction(payload) {
+  return {
+    kind: "request-user-input",
+    reason: "request-user-input",
+    text: extractRequestUserInputText(payload),
+  };
+}
+
+function isAwaitingUserInputOutput(entry, payload) {
+  if (!entry || !entry.pendingAwaitingUserInputCallId) return false;
+  return !!(
+    payload
+    && typeof payload === "object"
+    && payload.call_id === entry.pendingAwaitingUserInputCallId
+  );
+}
+
+function resolveAwaitingUserInputOutputState(payload) {
+  const output = payload && typeof payload.output === "string" ? payload.output : "";
+  return REQUEST_USER_INPUT_ABORT_RE.test(output) ? "idle" : "working";
 }
 
 function pollFile(filePath, fileName, options = {}) {
@@ -188,6 +347,11 @@ function pollFile(filePath, fileName, options = {}) {
       isSubagent: false,
       lastEventTime: Date.now(),
       lastState: null,
+      currentCollaborationMode: null,
+      turnCollaborationMode: null,
+      turnActive: false,
+      pendingAwaitingUserAction: null,
+      pendingAwaitingUserInputCallId: null,
       assistantLastOutput: null,
       assistantLastOutputTruncated: false,
       partial: "",

@@ -12,4 +12,11 @@ describe("main Codex official hook JSONL suppression", () => {
       "guardian_assessment should not re-drive hook-active Codex sessions from JSONL"
     );
   });
+
+  it("does not suppress internal Codex awaiting-user events", () => {
+    assert.equal(
+      createAgentRuntimeMain.CODEX_LOG_EVENTS_COVERED_BY_OFFICIAL_HOOKS.has("CodexAwaitingUserAction"),
+      false
+    );
+  });
 });

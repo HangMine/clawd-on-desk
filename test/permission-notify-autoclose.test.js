@@ -41,6 +41,7 @@ function createPermissionHarness({ logPath = null } = {}) {
       this._closedHandler = null;
       this._didFinishLoad = null;
       this.webContents = {
+        __ownerWindow: this,
         once: (event, cb) => {
           if (event === "did-finish-load") this._didFinishLoad = cb;
         },
@@ -70,7 +71,9 @@ function createPermissionHarness({ logPath = null } = {}) {
 
   const fakeElectron = {
     BrowserWindow: Object.assign(FakeBrowserWindow, {
-      fromWebContents() { return null; },
+      fromWebContents(webContents) {
+        return webContents && webContents.__ownerWindow ? webContents.__ownerWindow : null;
+      },
     }),
     globalShortcut: {
       register() { return true; },
@@ -80,6 +83,7 @@ function createPermissionHarness({ logPath = null } = {}) {
   };
   const permissionFactory = loadPermissionWithElectron(fakeElectron);
   let notificationAutoCloseMs = 10_000;
+  const focusCalls = [];
   const api = permissionFactory({
     win: { isDestroyed() { return false; } },
     permDebugLog: logPath,
@@ -102,13 +106,14 @@ function createPermissionHarness({ logPath = null } = {}) {
     getHitRectScreen: () => null,
     getHudReservedOffset: () => 0,
     repositionUpdateBubble: () => {},
-    focusTerminalForSession: () => {},
+    focusTerminalForSession: (...args) => focusCalls.push(args),
     guardAlwaysOnTop: () => {},
     reapplyMacVisibility: () => {},
   });
 
   return {
     api,
+    focusCalls,
     setNotificationAutoCloseMs(value) {
       notificationAutoCloseMs = value;
     },
@@ -307,5 +312,50 @@ describe("permission passive notify auto-close refresh", () => {
 
     mock.timers.tick(1);
     assert.strictEqual(api.pendingPermissions.length, 0);
+  });
+
+  it("keeps sticky Codex awaiting-user notifications until explicitly dismissed", () => {
+    mock.timers.enable({ apis: ["setTimeout", "Date"] });
+    mock.timers.setTime(100_000);
+    const harness = createPermissionHarness();
+    const { api } = harness;
+
+    api.showCodexNotifyBubble({
+      sessionId: "codex-a",
+      kind: "awaiting-user",
+      reason: "plan-review",
+      message: "Please review the plan.",
+      sticky: true,
+    });
+
+    assert.strictEqual(api.pendingPermissions.length, 1);
+    assert.strictEqual(api.pendingPermissions[0].sticky, true);
+    assert.strictEqual(api.pendingPermissions[0].autoExpireTimer, null);
+
+    harness.setNotificationAutoCloseMs(1_000);
+    api.refreshPassiveNotifyAutoClose();
+    mock.timers.tick(60_000);
+
+    assert.strictEqual(api.pendingPermissions.length, 1);
+  });
+
+  it("focuses the Codex terminal when a passive awaiting-user bubble requests it", () => {
+    const harness = createPermissionHarness();
+    const { api, focusCalls } = harness;
+
+    api.showCodexNotifyBubble({
+      sessionId: "codex-a",
+      kind: "awaiting-user",
+      reason: "assistant-question",
+      message: "Please confirm which option to use.",
+      sticky: true,
+    });
+    const entry = api.pendingPermissions[0];
+
+    api.handleDecide({ sender: entry.bubble.webContents }, "deny-and-focus");
+
+    assert.strictEqual(api.pendingPermissions.length, 0);
+    assert.strictEqual(focusCalls.length, 1);
+    assert.strictEqual(focusCalls[0][0], "codex-a");
   });
 });

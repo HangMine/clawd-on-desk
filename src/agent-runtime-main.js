@@ -3,6 +3,7 @@
 const DefaultCodexSubagentClassifier = require("../agents/codex-subagent-classifier");
 const {
   buildCodexMonitorUpdateOptions,
+  isCodexMonitorAwaitingUserEvent,
   isCodexMonitorMetadataOnlyEvent,
   isCodexMonitorPermissionEvent,
 } = require("./codex-monitor-callback");
@@ -20,10 +21,35 @@ const CODEX_LOG_EVENTS_COVERED_BY_OFFICIAL_HOOKS = new Set([
   "event_msg:custom_tool_call_output",
   "event_msg:task_complete",
 ]);
+const CODEX_AWAITING_USER_EVENT = "CodexAwaitingUserAction";
+const CODEX_COMPLETION_HOUSEKEEPING_EVENTS = new Set([
+  "Notification",
+  "stale-cleanup",
+  "event_msg:token_count",
+]);
 
 // Local Codex turns that are still in flight sit in one of these states. Kept in
 // sync with isWorkingLikeState() in state-stale-cleanup.js.
 const CODEX_WORKING_LIKE_STATES = new Set(["working", "thinking", "juggling"]);
+
+function latestEffectiveSessionEvent(session) {
+  const events = Array.isArray(session && session.recentEvents) ? session.recentEvents : [];
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i] && events[i].event;
+    if (event == null || CODEX_COMPLETION_HOUSEKEEPING_EVENTS.has(event)) continue;
+    return event;
+  }
+  return null;
+}
+
+function isCodexAwaitingUserNotificationHold(session) {
+  return !!(
+    session
+    && session.agentId === "codex"
+    && session.state === "notification"
+    && latestEffectiveSessionEvent(session) === CODEX_AWAITING_USER_EVENT
+  );
+}
 
 function createAgentRuntimeMain(options = {}) {
   const now = typeof options.now === "function" ? options.now : Date.now;
@@ -76,7 +102,8 @@ function createAgentRuntimeMain(options = {}) {
     const session = sessions && typeof sessions.get === "function" ? sessions.get(sessionId) : null;
     if (!session || session.agentId !== "codex") return false;
     if (session.host || session.headless) return false;
-    return CODEX_WORKING_LIKE_STATES.has(session.state);
+    return CODEX_WORKING_LIKE_STATES.has(session.state)
+      || isCodexAwaitingUserNotificationHold(session);
   }
 
   function shouldSuppressCodexLogEvent(sessionId, state, event) {
@@ -92,6 +119,9 @@ function createAgentRuntimeMain(options = {}) {
       markCodexOfficialHookSession(sessionId);
     }
     const result = updateSession(sessionId, state, event, opts);
+    if (opts && opts.agentId === "codex" && event === "UserPromptSubmit") {
+      clearCodexNotifyBubbles(sessionId, "codex-user-prompt-submit");
+    }
     maybeCaptureGhosttyTerminalId(sessionId, event, opts);
     return result;
   }
@@ -205,6 +235,20 @@ function createAgentRuntimeMain(options = {}) {
           showCodexNotifyBubble({
             sessionId: sid,
             command: (extra && extra.permissionDetail && extra.permissionDetail.command) || "",
+          });
+          return;
+        }
+        if (isCodexMonitorAwaitingUserEvent(state)) {
+          const options = buildCodexMonitorUpdateOptions(extra, {
+            includeHeadless: false,
+          });
+          updateSession(sid, "notification", "CodexAwaitingUserAction", options);
+          showCodexNotifyBubble({
+            sessionId: sid,
+            kind: "awaiting-user",
+            reason: extra && extra.awaitingUserAction && extra.awaitingUserAction.reason,
+            message: extra && extra.awaitingUserAction && extra.awaitingUserAction.text,
+            sticky: true,
           });
           return;
         }

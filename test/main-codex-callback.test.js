@@ -5,6 +5,7 @@ const assert = require("node:assert");
 
 const {
   buildCodexMonitorUpdateOptions,
+  isCodexMonitorAwaitingUserEvent,
   isCodexMonitorMetadataOnlyEvent,
   isCodexMonitorPermissionEvent,
 } = require("../src/codex-monitor-callback");
@@ -13,6 +14,11 @@ describe("Codex monitor callback helpers", () => {
   it("identifies JSONL permission events", () => {
     assert.strictEqual(isCodexMonitorPermissionEvent("codex-permission"), true);
     assert.strictEqual(isCodexMonitorPermissionEvent("working"), false);
+  });
+
+  it("identifies JSONL awaiting-user events", () => {
+    assert.strictEqual(isCodexMonitorAwaitingUserEvent("codex-awaiting-user"), true);
+    assert.strictEqual(isCodexMonitorAwaitingUserEvent("codex-permission"), false);
   });
 
   it("identifies token_count context updates as metadata-only events", () => {
@@ -96,6 +102,26 @@ describe("Codex monitor callback helpers", () => {
         source: "codex",
       },
       headless: false,
+    });
+  });
+
+  it("passes Codex awaiting-user detail from JSONL monitor updates", () => {
+    assert.deepStrictEqual(buildCodexMonitorUpdateOptions({
+      cwd: "/repo",
+      awaitingUserAction: {
+        kind: "plan-review",
+        reason: "plan-review",
+        text: "Please review the plan.",
+      },
+    }, { includeHeadless: false }), {
+      cwd: "/repo",
+      agentId: "codex",
+      sessionTitle: undefined,
+      awaitingUserAction: {
+        kind: "plan-review",
+        reason: "plan-review",
+        text: "Please review the plan.",
+      },
     });
   });
 

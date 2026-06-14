@@ -1107,6 +1107,40 @@ describe("updateSession()", () => {
     assert.strictEqual(api.sessions.get("perm-active").state, "working");
   });
 
+  it("keeps Codex awaiting-user notifications dominant until Codex moves forward", () => {
+    update(api, { id: "codex:wait", state: "working", event: "PreToolUse", agentId: "codex" });
+    update(api, {
+      id: "codex:wait",
+      state: "notification",
+      event: "CodexAwaitingUserAction",
+      agentId: "codex",
+    });
+
+    const session = api.sessions.get("codex:wait");
+    assert.strictEqual(session.state, "notification");
+    assert.strictEqual(session.muteNotificationSound, true);
+    assert.strictEqual(api.resolveDisplayState(), "notification");
+
+    mock.timers.tick((_defaultTheme.timings.minDisplay.working || 0) + 1);
+
+    assert.strictEqual(api.getCurrentState(), "notification");
+
+    mock.timers.tick(_defaultTheme.timings.autoReturn.notification + 1);
+
+    assert.strictEqual(api.resolveDisplayState(), "notification");
+    assert.strictEqual(api.getCurrentState(), "notification");
+
+    update(api, {
+      id: "codex:wait",
+      state: "working",
+      event: "response_item:function_call_output",
+      agentId: "codex",
+    });
+
+    assert.strictEqual(api.sessions.get("codex:wait").state, "working");
+    assert.strictEqual(api.resolveDisplayState(), "working");
+  });
+
   it("clearPermissionNotification releases a persisted notification session immediately", () => {
     api.sessions.set("codex:stale-permission", rawSession("notification", {
       agentId: "codex",

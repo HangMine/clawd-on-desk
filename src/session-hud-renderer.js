@@ -113,6 +113,7 @@ const EVENT_CHIP_MAP = {
   PermissionRequest: { key: "sessionNotification", cls: "chip-notification" },
   Elicitation: { key: "sessionNotification", cls: "chip-notification" },
   Notification: { key: "sessionNotification", cls: "chip-notification" },
+  CodexAwaitingUserAction: { key: "sessionNotification", cls: "chip-notification" },
   WorktreeCreate: { key: "sessionWorktree", cls: "chip-worktree" },
 };
 

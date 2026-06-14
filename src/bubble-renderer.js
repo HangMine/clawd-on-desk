@@ -27,6 +27,7 @@ const suggestionsContainer = document.getElementById("suggestions");
 const headerTitle = document.querySelector(".header-title");
 const sessionTag = document.getElementById("sessionTag");
 let elicitationMode = false;
+let passiveDenyBehavior = "deny";
 let elicitationQuestions = [];
 let elicitationAnswers = {};
 let activeQuestionIndex = 0;
@@ -76,6 +77,8 @@ const BUBBLE_STRINGS = {
     other: "Other",
     otherPlaceholder: "Type your answer…",
     codexPermission: "Codex Permission",
+    codexNeedsInput: "Codex needs your input",
+    checkCodexTerminal: "Review or reply in the Codex terminal.",
     codexToolApproval: "Codex Tool Approval",
     kimiPermission: "Kimi Permission",
     checkKimiTerminal: "Approve or reject this request in the Kimi terminal.",
@@ -111,6 +114,8 @@ const BUBBLE_STRINGS = {
     other: "\u5176\u4ED6",
     otherPlaceholder: "\u8F93\u5165\u4F60\u7684\u56DE\u7B54\u2026",
     codexPermission: "Codex \u6743\u9650\u8BF7\u6C42",
+    codexNeedsInput: "Codex \u6B63\u5728\u7B49\u5F85\u4F60",
+    checkCodexTerminal: "\u8BF7\u56DE\u5230 Codex \u7EC8\u7AEF\u67E5\u770B\u6216\u56DE\u590D\u3002",
     codexToolApproval: "Codex \u5DE5\u5177\u8C03\u7528\u5BA1\u6279",
     kimiPermission: "Kimi \u6743\u9650\u8BF7\u6C42",
     checkKimiTerminal: "\u8BF7\u5728 Kimi \u7EC8\u7AEF\u4E2D\u6279\u51C6\u6216\u62D2\u7EDD\u8BE5\u8BF7\u6C42\u3002",
@@ -146,6 +151,8 @@ const BUBBLE_STRINGS = {
     other: "其他",
     otherPlaceholder: "輸入你的回答…",
     codexPermission: "Codex 權限請求",
+    codexNeedsInput: "Codex 正在等待你",
+    checkCodexTerminal: "請回到 Codex 終端機查看或回覆。",
     codexToolApproval: "Codex 工具呼叫審批",
     kimiPermission: "Kimi 權限請求",
     checkKimiTerminal: "請在 Kimi 終端機中允許或拒絕此請求。",
@@ -181,6 +188,8 @@ const BUBBLE_STRINGS = {
     other: "\uAE30\uD0C0",
     otherPlaceholder: "\uC9C1\uC811 \uC785\uB825\u2026",
     codexPermission: "Codex \uAD8C\uD55C \uC694\uCCAD",
+    codexNeedsInput: "Codex\uAC00 \uC785\uB825\uC744 \uAE30\uB2E4\uB9AC\uACE0 \uC788\uC2B5\uB2C8\uB2E4",
+    checkCodexTerminal: "Codex \uD130\uBBF8\uB110\uC5D0\uC11C \uD655\uC778\uD558\uAC70\uB098 \uB2F5\uBCC0\uD558\uC138\uC694.",
     codexToolApproval: "Codex \uB3C4\uAD6C \uD638\uCD9C \uC2B9\uC778",
     kimiPermission: "Kimi \uAD8C\uD55C \uC694\uCCAD",
     checkKimiTerminal: "Kimi \uD130\uBBF8\uB110\uC5D0\uC11C \uC774 \uC694\uCCAD\uC744 \uD5C8\uC6A9\uD558\uAC70\uB098 \uAC70\uBD80\uD558\uC138\uC694.",
@@ -216,6 +225,8 @@ const BUBBLE_STRINGS = {
     other: "その他",
     otherPlaceholder: "回答を入力…",
     codexPermission: "Codex 権限リクエスト",
+    codexNeedsInput: "Codex が入力を待っています",
+    checkCodexTerminal: "Codex ターミナルで確認または返信してください。",
     codexToolApproval: "Codex ツール呼び出しの承認",
     kimiPermission: "Kimi 権限リクエスト",
     checkKimiTerminal: "Kimi ターミナルでこのリクエストを許可または拒否してください。",
@@ -360,6 +371,7 @@ function resetBubbleContent() {
   btnAllow.disabled = false;
   btnDeny.style.display = "";
   btnDeny.disabled = false;
+  passiveDenyBehavior = "deny";
   suggestionsContainer.innerHTML = "";
 }
 
@@ -787,6 +799,24 @@ function show(data) {
     return;
   }
 
+  // Codex awaiting-user notify mode — sticky prompt with terminal focus action.
+  if (data.toolName === "CodexAwaitingUserAction") {
+    headerTitle.textContent = bubbleText(data.lang, "codexNeedsInput");
+    toolPillText.textContent = "CODEX";
+    toolPill.setAttribute("data-tool", "CodexAwaitingUserAction");
+    toolPill.style.display = "";
+    commandBlock.textContent = (data.toolInput && data.toolInput.command) || bubbleText(data.lang, "checkCodexTerminal");
+    btnAllow.textContent = bubbleText(data.lang, "gotIt");
+    btnDeny.textContent = bubbleText(data.lang, "goToTerminal");
+    btnAllow.disabled = false;
+    btnDeny.disabled = false;
+    btnDeny.style.display = "";
+    passiveDenyBehavior = "deny-and-focus";
+    suggestionsContainer.innerHTML = "";
+    revealCard();
+    return;
+  }
+
   // Codex notify mode — informational bubble with Dismiss button only
   if (data.toolName === "CodexExec") {
     headerTitle.textContent = bubbleText(data.lang, "codexPermission");
@@ -939,7 +969,7 @@ btnDeny.addEventListener("click", () => {
   }
   btnDeny.textContent = "...";
   disableAll();
-  window.bubbleAPI.decide("deny");
+  window.bubbleAPI.decide(passiveDenyBehavior);
 });
 
 // Elicitation-only Enter-to-submit: selecting a preset radio/checkbox then
