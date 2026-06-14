@@ -20,6 +20,7 @@ ipcRenderer.on("session-hud:lang-change", (_event, payload) => {
 contextBridge.exposeInMainWorld("sessionHudAPI", {
   getI18n: () => ipcRenderer.invoke("session-hud:get-i18n"),
   focusSession: (sessionId) => ipcRenderer.send("session-hud:focus-session", sessionId),
+  hideSession: (sessionId) => ipcRenderer.invoke("dashboard:hide-session", sessionId),
   openDashboard: () => ipcRenderer.send("session-hud:open-dashboard"),
   setPinned: (value) => ipcRenderer.send("session-hud:set-pinned", !!value),
   ackCompletion: (sessionId) => ipcRenderer.invoke("session:ack-completion", sessionId),

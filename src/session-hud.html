@@ -59,7 +59,7 @@ body { padding: 2px 3px 8px; }
 }
 
 .hud.has-pin .row {
-  padding-right: 28px;
+  padding-right: 30px;
 }
 
 .pin-btn {
@@ -203,6 +203,41 @@ body { padding: 2px 3px 8px; }
   white-space: nowrap;
 }
 
+.hide-btn {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.58;
+  transition: opacity 100ms ease, background 100ms ease, color 100ms ease;
+}
+
+.hide-btn:hover {
+  opacity: 1;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.hide-btn:active {
+  background: rgba(0, 0, 0, 0.10);
+}
+
+.hide-btn:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
 .elapsed {
   min-width: 0;
   overflow: hidden;
@@ -251,6 +286,12 @@ body { padding: 2px 3px 8px; }
   .usage-neutral { background: rgba(107, 114, 128, 0.20); color: #a1a1aa; }
   .usage-warm { background: rgba(245, 158, 11, 0.20); color: #fbbf24; }
   .usage-hot { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+  .hide-btn:hover {
+    background: rgba(255, 255, 255, 0.10);
+  }
+  .hide-btn:active {
+    background: rgba(255, 255, 255, 0.14);
+  }
 }
 
 .completion-bell {

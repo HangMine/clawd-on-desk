@@ -235,6 +235,32 @@ test("dashboard renderer wires the Mark-read button + ackCompletion fallback (so
   }
 });
 
+test("session HUD wires the hide button to the shared hide-session action (source check)", () => {
+  const rendererSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "session-hud-renderer.js"),
+    "utf8"
+  );
+  const preloadSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "preload-session-hud.js"),
+    "utf8"
+  );
+  const htmlSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "session-hud.html"),
+    "utf8"
+  );
+
+  assert.ok(rendererSrc.includes("createHideButton"),
+    "HUD renderer should define a hide button helper");
+  assert.ok(rendererSrc.includes("window.sessionHudAPI.hideSession"),
+    "HUD renderer must call sessionHudAPI.hideSession");
+  assert.ok(/event\.stopPropagation\(\)/.test(rendererSrc),
+    "HUD hide button should stop row click propagation");
+  assert.ok(preloadSrc.includes('hideSession: (sessionId) => ipcRenderer.invoke("dashboard:hide-session", sessionId)'),
+    "HUD preload should bridge hideSession through dashboard:hide-session");
+  assert.ok(htmlSrc.includes(".hide-btn"),
+    "HUD stylesheet should define hide button styling");
+});
+
 test("main forwards dashboard open source options into session IPC", () => {
   const mainSource = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
   const preservesOptions = [

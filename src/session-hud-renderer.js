@@ -169,6 +169,31 @@ const FOCUS_UNAVAILABLE_SVG = `<svg width="11" height="11" viewBox="0 0 24 24" f
 const PIN_SVG_FILLED = `<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M14 4l6 6-4 1-3 3 1 5-2 1-4-4-5 5-1-1 5-5-4-4 1-2 5 1 3-3 1-4z"/></svg>`;
 const PIN_SVG_OUTLINE = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M14 4l6 6-4 1-3 3 1 5-2 1-4-4-5 5-1-1 5-5-4-4 1-2 5 1 3-3 1-4z"/></svg>`;
 
+function createHideButton(session) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "hide-btn";
+  button.textContent = "\u00d7";
+  button.title = t("dashboardHideSessionTitle");
+  button.setAttribute("aria-label", t("dismiss"));
+  button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (!session || !session.id || !window.sessionHudAPI || typeof window.sessionHudAPI.hideSession !== "function") return;
+    button.disabled = true;
+    try {
+      const result = await window.sessionHudAPI.hideSession(session.id);
+      if (!result || (result.status !== "ok" && result.status !== "not-found")) {
+        button.disabled = false;
+        console.warn("session hud hide failed:", result && result.message);
+      }
+    } catch (err) {
+      button.disabled = false;
+      console.warn("session hud hide threw:", err);
+    }
+  });
+  return button;
+}
+
 function updateUnread(sessions) {
   const now = Date.now();
   const currentIds = new Set(sessions.map((s) => s.id));
@@ -291,6 +316,11 @@ function createRowForSession(session, now) {
     elapsed.dataset.updatedAt = String(updatedAt);
     elapsed.textContent = formatElapsed(now - updatedAt);
     right.appendChild(elapsed);
+    hasRightContent = true;
+  }
+
+  if (session.id) {
+    right.appendChild(createHideButton(session));
     hasRightContent = true;
   }
 
